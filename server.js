@@ -7,6 +7,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const path = require('path');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
@@ -15,6 +16,7 @@ app.use(cors()); // Allows your website frontend to safely talk to this backend 
 // 🔑 Configuration Settings
 const SPREADSHEET_ID = '1exeaE_MdsWKvnWKIwpglHmjV7WOCdd15pan5lJLDAS8'; // Actual Sheet ID
 const KEY_FILE_PATH = path.join(__dirname, 'google-credentials.json'); // Make sure your downloaded JSON is renamed to this
+const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || ''; // n8n agentic workflow trigger
 
 // Authenticate with Google (Handles both local file and production cloud string)
 let auth;
@@ -80,6 +82,17 @@ app.post('/api/donors/register', async (req, res) => {
       medicalHistory || 'Clear history',
       'True'
     ];
+
+    // Fire-and-forget n8n webhook trigger (non-blocking)
+    if (N8N_WEBHOOK_URL) {
+      axios.post(N8N_WEBHOOK_URL, {
+        rawName: name,
+        rawMobile: mobile,
+        rawAddress: address,
+        rawMedical: medicalHistory,
+        timestamp: new Date().toISOString()
+      }).catch(err => console.error('Agent webhook failed to trigger:', err.message));
+    }
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,

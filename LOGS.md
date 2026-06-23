@@ -26,3 +26,13 @@
 ### Other
 - Created `AGENTS.md` with project commands, architecture, and setup instructions.
 - Verified: register, duplicate detection, and match endpoints all working.
+
+## 2026-06-23 — n8n webhook trigger
+
+### Feature — Agentic webhook integration
+- Added `axios` dependency (`npm install axios`).
+- Added `N8N_WEBHOOK_URL` env var to `server.js` at line 18.
+- Register route now sends a fire-and-forget POST to n8n with `rawName`, `rawMobile`, `rawAddress`, `rawMedical`, and `timestamp` right before writing to the sheet (`server.js:84-93`).
+- Webhook is non-blocking — the `.catch()` logs failures without affecting the response.
+- Updated `README.md` with full API docs, deployment guide, and env var table.
+- Updated `AGENTS.md` with axios dependency, webhook note, and corrected stale `.gitignore` claim.
