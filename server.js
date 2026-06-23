@@ -16,11 +16,22 @@ app.use(cors()); // Allows your website frontend to safely talk to this backend 
 const SPREADSHEET_ID = '1exeaE_MdsWKvnWKIwpglHmjV7WOCdd15pan5lJLDAS8'; // Actual Sheet ID
 const KEY_FILE_PATH = path.join(__dirname, 'google-credentials.json'); // Make sure your downloaded JSON is renamed to this
 
-// Authenticate with Google
-const auth = new google.auth.GoogleAuth({
-  keyFile: KEY_FILE_PATH,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
+// Authenticate with Google (Handles both local file and production cloud string)
+let auth;
+if (process.env.GOOGLE_CREDENTIALS_JSON) {
+  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+  auth = new google.auth.JWT(
+    credentials.client_email,
+    null,
+    credentials.private_key,
+    ['https://www.googleapis.com/auth/spreadsheets']
+  );
+} else {
+  auth = new google.auth.GoogleAuth({
+    keyFile: KEY_FILE_PATH,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+}
 
 /**
  * 📩 Route 1: Save a new Blood Donor Volunteer
@@ -30,26 +41,46 @@ app.post('/api/donors/register', async (req, res) => {
   try {
     const { name, address, mobile, age, bloodGroup, medicalHistory } = req.body;
 
-    // Simple backend validation to showcase structured data entry
     if (!name || !mobile || !bloodGroup) {
       return res.status(400).json({ error: 'Name, Mobile, and Blood Group are required fields.' });
     }
 
     const sheets = google.sheets({ version: 'v4', auth });
-    
-    // Format the row array matching your column headers exactly
+
+    // Read existing rows to check for duplicate mobile
+    const existing = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Sheet1!A:H',
+    });
+
+    const rows = existing.data.values;
+    const normalisedMobile = String(mobile).replace(/^0+/, '');
+
+    if (rows && rows.length > 1) {
+      for (let i = 1; i < rows.length; i++) {
+        const storedMobile = String(rows[i][3] || '').replace(/^0+/, '');
+        if (storedMobile === normalisedMobile) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `Sheet1!H${i + 1}`,
+            valueInputOption: 'RAW',
+            resource: { values: [['FALSE']] },
+          });
+        }
+      }
+    }
+
     const newRow = [
-      new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }), // Local Pakistan Timestamp
+      new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }),
       name,
       address || 'N/A',
       mobile,
       age || 'N/A',
       bloodGroup.toUpperCase().trim(),
       medicalHistory || 'Clear history',
-      'True' // Available by default
+      'True'
     ];
 
-    // Append the row to "Sheet1"
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Sheet1!A:H',
