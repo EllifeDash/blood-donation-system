@@ -1,2 +1,6 @@
 node_modules/
 google-credentials.json
+.wwebjs_auth/
+.wwebjs_cache/
+LOGS.md
+AUDIT_REPORT.md

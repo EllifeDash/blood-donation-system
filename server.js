@@ -7,16 +7,75 @@ const express = require('express');
 const { google } = require('googleapis');
 const cors = require('cors');
 const path = require('path');
-const axios = require('axios');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
 
 const app = express();
 app.use(express.json());
 app.use(cors()); // Allows your website frontend to safely talk to this backend API
 
+// ── WhatsApp Client (Unofficial, headless WhatsApp Web) ──
+const messageQueue = [];
+let whatsappClientReady = false;
+
+const whatsappClient = new Client({
+  authStrategy: new LocalAuth(),
+  puppeteer: {
+    headless: true,
+    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  }
+});
+
+whatsappClient.on('qr', (qr) => {
+  qrcode.generate(qr, { small: true });
+});
+
+whatsappClient.on('ready', () => {
+  console.log('🚀 WhatsApp Client is authenticated and active!');
+  whatsappClientReady = true;
+  // Drain queued messages that accumulated while offline
+  while (messageQueue.length > 0) {
+    const { to, body, name } = messageQueue.shift();
+    whatsappClient.sendMessage(to, body)
+      .then(() => console.log(`Queued WhatsApp confirmation sent to ${name}`))
+      .catch(err => console.error('Queued WhatsApp send failed:', err.message));
+  }
+});
+
+whatsappClient.on('disconnected', () => {
+  console.log('⚠️ WhatsApp Client disconnected. Reconnecting...');
+  whatsappClientReady = false;
+});
+
+whatsappClient.initialize().catch(err => {
+  console.error('⚠️ WhatsApp client failed to initialize (server continues running):', err.message);
+});
+
+function sendWhatsAppMessage(to, body, name) {
+  if (whatsappClientReady) {
+    return whatsappClient.sendMessage(to, body)
+      .then(() => console.log(`WhatsApp confirmation sent to ${name}`))
+      .catch(err => console.error('WhatsApp send failed:', err.message));
+  } else {
+    messageQueue.push({ to, body, name });
+    console.log(`WhatsApp offline — queued message for ${name}`);
+    return Promise.resolve();
+  }
+}
+
+function formatWhatsAppNumber(mobile) {
+  let cleaned = String(mobile).replace(/\D/g, '');
+  if (cleaned.startsWith('0092')) cleaned = cleaned.slice(4);
+  else if (cleaned.startsWith('92')) cleaned = cleaned.slice(2);
+  else if (cleaned.startsWith('0')) cleaned = cleaned.slice(1);
+  return '92' + cleaned + '@c.us';
+}
+// ─────────────────────────────────────────────────────────
+
 // 🔑 Configuration Settings
 const SPREADSHEET_ID = '1exeaE_MdsWKvnWKIwpglHmjV7WOCdd15pan5lJLDAS8'; // Actual Sheet ID
 const KEY_FILE_PATH = path.join(__dirname, 'google-credentials.json'); // Make sure your downloaded JSON is renamed to this
-const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || ''; // n8n agentic workflow trigger
 
 // Authenticate with Google (Handles both local file and production cloud string)
 let auth;
@@ -36,75 +95,36 @@ if (process.env.GOOGLE_CREDENTIALS_JSON) {
 }
 
 /**
- * 📩 Route 1: Save a new Blood Donor Volunteer
- * Triggered when someone submits the registration form on your website
+ * 📩 Route 1: Trigger WhatsApp confirmation
+ * Called by n8n after a donor registers via the frontend webhook.
+ * Accepts phone, name, and bloodGroup to send a WhatsApp confirmation.
  */
 app.post('/api/donors/register', async (req, res) => {
   try {
-    const { name, address, mobile, age, bloodGroup, medicalHistory } = req.body;
+    const { phone, name, bloodGroup } = req.body;
 
-    if (!name || !mobile || !bloodGroup) {
-      return res.status(400).json({ error: 'Name, Mobile, and Blood Group are required fields.' });
+    if (!phone || !name || !bloodGroup) {
+      return res.status(400).json({ error: 'Phone, Name, and Blood Group are required fields.' });
     }
 
-    const sheets = google.sheets({ version: 'v4', auth });
+    // Fire-and-forget WhatsApp confirmation (non-blocking)
+    const waMessage = [
+      '🩸 *Nankana Public Blood Registry* 🩸',
+      '',
+      `Hello ${name},`,
+      '',
+      'Thank you for proudly registering as a volunteer blood donor with Nankana Home Care. Your profile is now securely active in our community registry.',
+      '',
+      `If a local family or emergency case matches your blood type (${bloodGroup.toUpperCase().trim()}), a verified operator may reach out to you via this phone number.`,
+      '',
+      'Thank you for your willingness to save lives locally in Nankana Sahib! ❤️'
+    ].join('\n');
+    sendWhatsAppMessage(formatWhatsAppNumber(phone), waMessage, name);
 
-    // Read existing rows to check for duplicate mobile
-    const existing = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A:H',
-    });
-
-    const rows = existing.data.values;
-    const normalisedMobile = String(mobile).replace(/^0+/, '');
-
-    if (rows && rows.length > 1) {
-      for (let i = 1; i < rows.length; i++) {
-        const storedMobile = String(rows[i][3] || '').replace(/^0+/, '');
-        if (storedMobile === normalisedMobile) {
-          await sheets.spreadsheets.values.update({
-            spreadsheetId: SPREADSHEET_ID,
-            range: `Sheet1!H${i + 1}`,
-            valueInputOption: 'RAW',
-            resource: { values: [['FALSE']] },
-          });
-        }
-      }
-    }
-
-    const newRow = [
-      new Date().toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }),
-      name,
-      address || 'N/A',
-      mobile,
-      age || 'N/A',
-      bloodGroup.toUpperCase().trim(),
-      medicalHistory || 'Clear history',
-      'True'
-    ];
-
-    // Fire-and-forget n8n webhook trigger (non-blocking)
-    if (N8N_WEBHOOK_URL) {
-      axios.post(N8N_WEBHOOK_URL, {
-        rawName: name,
-        rawMobile: mobile,
-        rawAddress: address,
-        rawMedical: medicalHistory,
-        timestamp: new Date().toISOString()
-      }).catch(err => console.error('Agent webhook failed to trigger:', err.message));
-    }
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A:H',
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [newRow] },
-    });
-
-    return res.status(200).json({ success: true, message: 'Volunteer donor registered successfully!' });
+    return res.status(200).json({ success: true, message: 'WhatsApp confirmation triggered successfully!' });
   } catch (error) {
-    console.error('Spreadsheet Error:', error);
-    return res.status(500).json({ error: 'Failed to write data to storage system.' });
+    console.error('WhatsApp Error:', error);
+    return res.status(500).json({ error: 'Failed to send WhatsApp confirmation.' });
   }
 });
 
@@ -146,6 +166,13 @@ app.post('/api/donors/match', async (req, res) => {
     console.error('Search Error:', error);
     return res.status(500).json({ error: 'Internal system search failed.' });
   }
+});
+
+// Graceful shutdown — closes headless browser and saves session
+process.on('SIGINT', async () => {
+  console.log('\nShutting down gracefully...');
+  await whatsappClient.destroy();
+  process.exit();
 });
 
 const PORT = process.env.PORT || 3000;

@@ -52,7 +52,5 @@ Find active donors by blood group.
 
 ## Deployment (Render)
 
-1. Connect the GitHub repo to Render.
-2. Set `GOOGLE_CREDENTIALS_JSON` to the full service account JSON (minified) in Render's Environment Variables.
-3. Optionally set `N8N_WEBHOOK_URL`.
-4. Render runs `npm start` automatically.
+1. n8n
+Production URL: https://pregnancy-footpad-wince.ngrok-free.dev/webhook/nhc-donor-registration
